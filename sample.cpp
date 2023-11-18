@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <ctype.h>
 
 #define _USE_MATH_DEFINES
@@ -21,7 +22,6 @@
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include "glut.h"
-
 
 //	This is a sample OpenGL / GLUT program
 //
@@ -88,6 +88,16 @@ const int LEFT   = 4;
 const int MIDDLE = 2;
 const int RIGHT  = 1;
 
+struct planet
+{
+	char* name;
+	char* file;
+	float                   scale;
+	int                     displayList;
+	char                    key;
+	unsigned int            texObject;
+};
+
 // which projection:
 
 enum Projections
@@ -149,6 +159,19 @@ const GLfloat Colors[ ][3] =
 	{ 1., 0., 1. },		// magenta
 };
 
+struct planet Planets[] =
+{
+	   { "Venus",      "venus.bmp",     0.95f, 0, 'v', 0 },
+	   { "Earth",      "earth.bmp",     1.00f, 0, 'e', 0 },
+	   { "Mars",       "mars.bmp",      0.53f, 0, 'm', 0 },
+	   { "Jupiter",    "jupiter.bmp",  11.21f, 0, 'j', 0 },
+	   { "Saturn",     "saturn.bmp",    9.45f, 0, 's', 0 },
+	   { "Uranus",     "uranus.bmp",    4.01f, 0, 'u', 0 },
+	   { "Neptune",    "neptune.bmp",   3.88f, 0, 'n', 0 }
+};
+
+const int NUMPLANETS = sizeof(Planets) / sizeof(struct planet);
+
 // fog parameters:
 
 const GLfloat FOGCOLOR[4] = { .0f, .0f, .0f, 1.f };
@@ -178,7 +201,7 @@ const int MS_PER_CYCLE = 10000;		// 10000 milliseconds = 10 seconds
 int		ActiveButton;			// current button that is down
 GLuint	AxesList;				// list to hold the axes
 int		AxesOn;					// != 0 means to draw the axes
-GLuint	BoxList;				// object display list
+GLuint	SphereDL;				// object display list
 int		DebugOn;				// != 0 means to print debugging info
 int		DepthCueOn;				// != 0 means to use intensity depth cueing
 int		DepthBufferOn;			// != 0 means to use the z-buffer
@@ -191,6 +214,8 @@ int		ShadowsOn;				// != 0 means to turn shadows on
 float	Time;					// used for animation, this has a value between 0. and 1.
 int		Xmouse, Ymouse;			// mouse values
 float	Xrot, Yrot;				// rotation angles in degrees
+int		NowPlanet;
+int		mode;
 
 
 // function prototypes:
@@ -271,11 +296,11 @@ MulArray3(float factor, float a, float b, float c )
 // these are here for when you need them -- just uncomment the ones you need:
 
 //#include "setmaterial.cpp"
-//#include "setlight.cpp"
-//#include "osusphere.cpp"
+#include "setlight.cpp"
+#include "osusphere.cpp"
 //#include "osucone.cpp"
 //#include "osutorus.cpp"
-//#include "bmptotexture.cpp"
+#include "bmptotexture.cpp"
 //#include "loadobjfile.cpp"
 //#include "keytime.cpp"
 //#include "glslprogram.cpp"
@@ -442,10 +467,26 @@ Display( )
 
 	glEnable( GL_NORMALIZE );
 
+	if (mode == 1 || mode == 2)
+		glEnable(GL_TEXTURE_2D);
+	else
+		glDisable(GL_TEXTURE_2D);
 
-	// draw the box object by calling up its display list:
+	glEnable(GL_LIGHTING);
 
-	glCallList( BoxList );
+	SetPointLight(GL_LIGHT0, 20 * sin(Time * F_2_PI * 5), 0, 20 * cos(Time * F_2_PI * 5), 255, 255, 255);
+
+	glEnable(GL_LIGHT0);
+
+	if (mode == 1)
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	else
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+	glCallList(Planets[NowPlanet].displayList);
+
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_LIGHTING);
 
 #ifdef DEMO_Z_FIGHTING
 	if( DepthFightingOn != 0 )
@@ -804,6 +845,27 @@ InitGraphics( )
 
 	// all other setups go here, such as GLSLProgram and KeyTime setups:
 
+	for (int i = 0; i < NUMPLANETS; i++) {
+		int width, height;
+		std::string filename = "textures/" + (std::string)Planets[i].file;
+		char* file = &filename[0];
+
+		unsigned char* texture = BmpToTexture(file, &width, &height);
+		if (texture == NULL) {
+			fprintf(stderr, "Cannot open texture '%s'\n", file);
+		}
+		else {
+			fprintf(stderr, "Opened '%s': width = %d ; height = %d\n", file, width, height);
+		}
+
+		glGenTextures(1, &Planets[i].texObject);
+		glBindTexture(GL_TEXTURE_2D, Planets[i].texObject);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexImage2D(GL_TEXTURE_2D, 0, 3, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, texture);
+	}
 }
 
 
@@ -818,64 +880,24 @@ InitLists( )
 	if (DebugOn != 0)
 		fprintf(stderr, "Starting InitLists.\n");
 
-	float dx = BOXSIZE / 2.f;
-	float dy = BOXSIZE / 2.f;
-	float dz = BOXSIZE / 2.f;
 	glutSetWindow( MainWindow );
+	SphereDL = glGenLists(1);
+	glNewList(SphereDL, GL_COMPILE);
+		OsuSphere(1., 100, 100);
+	glEndList();
 
 	// create the object:
 
-	BoxList = glGenLists( 1 );
-	glNewList( BoxList, GL_COMPILE );
-
-		glBegin( GL_QUADS );
-
-			glColor3f( 1., 0., 0. );
-
-				glNormal3f( 1., 0., 0. );
-					glVertex3f(  dx, -dy,  dz );
-					glVertex3f(  dx, -dy, -dz );
-					glVertex3f(  dx,  dy, -dz );
-					glVertex3f(  dx,  dy,  dz );
-
-				glNormal3f(-1., 0., 0.);
-					glVertex3f( -dx, -dy,  dz);
-					glVertex3f( -dx,  dy,  dz );
-					glVertex3f( -dx,  dy, -dz );
-					glVertex3f( -dx, -dy, -dz );
-
-			glColor3f( 0., 1., 0. );
-
-				glNormal3f(0., 1., 0.);
-					glVertex3f( -dx,  dy,  dz );
-					glVertex3f(  dx,  dy,  dz );
-					glVertex3f(  dx,  dy, -dz );
-					glVertex3f( -dx,  dy, -dz );
-
-				glNormal3f(0., -1., 0.);
-					glVertex3f( -dx, -dy,  dz);
-					glVertex3f( -dx, -dy, -dz );
-					glVertex3f(  dx, -dy, -dz );
-					glVertex3f(  dx, -dy,  dz );
-
-			glColor3f(0., 0., 1.);
-
-				glNormal3f(0., 0., 1.);
-					glVertex3f(-dx, -dy, dz);
-					glVertex3f( dx, -dy, dz);
-					glVertex3f( dx,  dy, dz);
-					glVertex3f(-dx,  dy, dz);
-
-				glNormal3f(0., 0., -1.);
-					glVertex3f(-dx, -dy, -dz);
-					glVertex3f(-dx,  dy, -dz);
-					glVertex3f( dx,  dy, -dz);
-					glVertex3f( dx, -dy, -dz);
-
-		glEnd( );
-
-	glEndList( );
-
+	for (int i = 0; i < NUMPLANETS; i++) {
+		Planets[i].displayList = glGenLists(1);
+		glNewList(Planets[i].displayList, GL_COMPILE);
+			glBindTexture(GL_TEXTURE_2D, Planets[i].texObject);
+			glPushMatrix();
+				glScalef(Planets[i].scale, Planets[i].scale, Planets[i].scale);
+				glCallList(SphereDL);
+			glPopMatrix();
+		glEndList();
+	}
 
 	// create the axes:
 
@@ -906,6 +928,46 @@ Keyboard( unsigned char c, int x, int y )
 		case 'p':
 		case 'P':
 			NowProjection = PERSP;
+			break;
+
+		case 'v':
+		case 'V':
+			NowPlanet = 0;
+			break;
+
+		case 'e':
+		case 'E':
+			NowPlanet = 1;
+			break;
+
+		case 'm':
+		case 'M':
+			NowPlanet = 2;
+			break;
+
+		case 'j':
+		case 'J':
+			NowPlanet = 3;
+			break;
+
+		case 's':
+		case 'S':
+			NowPlanet = 4;
+			break;
+
+		case 'u':
+		case 'U':
+			NowPlanet = 5;
+			break;
+
+		case 'n':
+		case 'N':
+			NowPlanet = 6;
+			break;
+
+		case 't':
+		case 'T':
+			mode = (mode == 3) ? 1 : mode + 1;
 			break;
 
 		case 'q':
@@ -1037,6 +1099,8 @@ Reset( )
 	NowColor = YELLOW;
 	NowProjection = PERSP;
 	Xrot = Yrot = 0.;
+	NowPlanet = 1;
+	mode = 1;
 }
 
 
